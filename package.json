@@ -1,0 +1,10 @@
+{
+  "name": "safetracker-root",
+  "version": "1.0.0",
+  "description": "SafeTracker root launcher",
+  "scripts": {
+    "start": "node start.js",
+    "server": "node server/server.js",
+    "app": "cd SafeTracker && npx expo start --lan --port 8090"
+  }
+}
