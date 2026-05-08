@@ -15,19 +15,54 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity, Alert,
-  Modal, ScrollView, StatusBar, Animated, Switch, AppState,
+  Modal, ScrollView, StatusBar, Animated, Switch, AppState, Platform,
 } from 'react-native';
-import * as Location   from 'expo-location';
-import * as TaskManager from 'expo-task-manager';
-import AsyncStorage    from '@react-native-async-storage/async-storage';
-import NetInfo         from '@react-native-community/netinfo';
+import * as Location      from 'expo-location';
+import * as TaskManager   from 'expo-task-manager';
+import * as Application   from 'expo-application';
+import AsyncStorage       from '@react-native-async-storage/async-storage';
+import NetInfo            from '@react-native-community/netinfo';
 
 // ─── CONFIGURATION ─────────────────────────────────────────────────────────────
-const SERVER_URL        = 'https://safetracker-k5wy.onrender.com'; // ← Permanent Render URL
-const DEVICE_ID         = 'device-001';                // ← Unique ID for this device
-const LOCATION_TASK     = 'safe-tracker-bg-task';
-const QUEUE_STORAGE_KEY = '@safetracker_offline_queue';
-const MAX_QUEUE_SIZE    = 2000; // store up to 2000 points (~5.5 hours at 10s intervals)
+const SERVER_URL          = 'https://safetracker-k5wy.onrender.com'; // ← Permanent Render URL
+const LOCATION_TASK       = 'safe-tracker-bg-task';
+const QUEUE_STORAGE_KEY   = '@safetracker_offline_queue';
+const DEVICE_ID_STORE_KEY = '@safetracker_device_id';
+const MAX_QUEUE_SIZE      = 2000; // store up to 2000 points (~5.5 hours at 10s intervals)
+// ──────────────────────────────────────────────────────────────────────────────
+
+// ─── DEVICE ID — Persistent unique ID per physical device ─────────────────────
+// Reads hardware ID (androidId / identifierForVendor) and stores it in
+// AsyncStorage so it survives app updates and is stable across sessions.
+let _cachedDeviceId = null; // module-level cache so BG task can read it
+
+async function getDeviceId() {
+  if (_cachedDeviceId) return _cachedDeviceId;
+
+  // Check if we already stored one
+  const stored = await AsyncStorage.getItem(DEVICE_ID_STORE_KEY);
+  if (stored) { _cachedDeviceId = stored; return stored; }
+
+  // Generate from hardware ID
+  let id = null;
+  try {
+    if (Platform.OS === 'android') {
+      id = Application.androidId;          // stable unique hardware ID
+    } else {
+      id = await Application.getIosIdForVendorAsync(); // per-vendor unique ID
+    }
+  } catch (_) { /* fallback below */ }
+
+  // Fallback: generate a random ID if hardware ID unavailable
+  if (!id) {
+    id = 'device-' + Math.random().toString(36).slice(2, 10).toUpperCase();
+  }
+
+  await AsyncStorage.setItem(DEVICE_ID_STORE_KEY, id);
+  _cachedDeviceId = id;
+  console.log('[DeviceID] Assigned:', id);
+  return id;
+}
 // ──────────────────────────────────────────────────────────────────────────────
 
 // ─── OFFLINE QUEUE HELPERS ────────────────────────────────────────────────────
@@ -81,8 +116,9 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }) => {
 
   const { locations } = data;
   const loc = locations[0];
+  const deviceId = await getDeviceId(); // reads cached ID or AsyncStorage
   const record = {
-    deviceId:  DEVICE_ID,
+    deviceId,
     latitude:  loc.coords.latitude,
     longitude: loc.coords.longitude,
     accuracy:  loc.coords.accuracy,
@@ -129,6 +165,7 @@ export default function App() {
   const [bgGranted,    setBgGranted]    = useState(false);
   const [highAccuracy, setHighAccuracy] = useState(true);
   const [log,          setLog]          = useState([]);
+  const [deviceId,     setDeviceId]     = useState('Loading…');
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const appState  = useRef(AppState.currentState);
@@ -190,6 +227,11 @@ export default function App() {
   // ── On mount ────────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
+      // Resolve and display the persistent device ID
+      const id = await getDeviceId();
+      setDeviceId(id);
+      addLog(`📱 Device ID: ${id}`);
+
       const fg = await Location.getForegroundPermissionsAsync();
       const bg = await Location.getBackgroundPermissionsAsync();
       setFgGranted(fg.status === 'granted');
@@ -320,6 +362,7 @@ export default function App() {
         <View>
           <Text style={s.appName}>SafeTracker</Text>
           <Text style={s.appSub}>Transparent · Consensual · Offline-Capable</Text>
+          <Text style={s.deviceIdText}>📱 ID: {deviceId}</Text>
         </View>
         {/* Online / Offline badge */}
         <View style={[s.netBadge, { borderColor: isOnline ? '#16a34a' : '#f59e0b' }]}>
@@ -422,6 +465,7 @@ const s = StyleSheet.create({
   header:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
   appName:      { fontSize: 30, fontWeight: '800', color: '#f8fafc', letterSpacing: 0.5 },
   appSub:       { fontSize: 11, color: '#475569', marginTop: 2 },
+  deviceIdText: { fontSize: 10, color: '#334155', marginTop: 3, fontFamily: 'monospace' },
   netBadge:     { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
   netDot:       { width: 7, height: 7, borderRadius: 4 },
   netLabel:     { fontSize: 12, fontWeight: '700' },
